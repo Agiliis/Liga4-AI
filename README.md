@@ -18,3 +18,16 @@ Columns 1-42 are the positions on the grid from left to right, top to bottom. Ea
 Column 43 marks the winner of the game : -1, 1, and 0 for tie games.</br>
 
 **Instâncias: 376641**
+
+## Algoritmos:
+
+1. **1-NN**
+
+Para cada jogada possível, mede a menor distância entre o quadro gerado pela jogada e algum quadro em que a máquina vença. Então escolhe a jogada com a menor das distâncias.
+
+**Database**: [./db/df_jogador_2.csv](./db/df_jogador_2.csv)</br>
+**1**: 1º jogador</br>
+**-1**: 2º jogador (máquina)</br>
+**0**: vazio</br>
+**Forma (shape): (169025, 42)**</br>
+*Armazena todos os jogos onde o 2º jogador ganha. Processado do DB do Kaggle*
