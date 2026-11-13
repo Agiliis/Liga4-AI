@@ -1,30 +1,44 @@
 """
-frontend.py - Interface gráfica (pygame) do Conecta-4.
+frontend.py - Tela do jogo (pygame) e o `App`, que navega entre as telas.
 
 Este módulo só desenha e lê entradas. Toda regra do jogo vive no backend:
 o frontend chama `game.play(col)`, lê `game.board`, `game.status`, etc.
 
-Controles
----------
+Telas
+-----
+    MenuScreen / CreditsScreen   em menu.py
+    GameScreen                   aqui: o tabuleiro em si
+
+O `App` recebe duas "fábricas" de partida (funções sem argumentos que devolvem
+um `Game`), uma para cada modo. Quem decide quais jogadores existem (humanos,
+CPU...) é o main.py, não o frontend.
+
+Controles na partida
+--------------------
     Mouse          mover = escolher coluna | clique = soltar a peça
     Setas / A, D   mover a seleção
     Espaço/Enter   soltar a peça (também Seta para baixo / S)
     R              novo jogo
-    Esc            sair
+    Esc            voltar ao menu
 
 Jogadores que não são humanos (Player.is_human == False) são consultados
-automaticamente via `choose_move(game)`: é por aqui que a IA vai jogar.
+automaticamente via `choose_move(game)`: é por aqui que a IA joga.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import pygame
 
 from src.backend import Game, InvalidMoveError, Piece, Status
+from src.menu import CreditsScreen, MenuScreen
+from src.ui import (
+    GO_CREDITS, GO_MENU, GO_PVC, GO_PVP, MUTED, PIECE_STYLE, QUIT, TEXT,
+    Button, Screen, make_disc_sprite, make_gradient, mix, pick_font,
+)
 
 # --------------------------------------------------------------------------- #
 # Aparência
@@ -32,32 +46,10 @@ from src.backend import Game, InvalidMoveError, Piece, Status
 FPS = 60
 CPU_THINK_DELAY = 0.45  # pausa antes de um jogador não humano jogar (segundos)
 
-BG_TOP = (16, 20, 46)
-BG_BOTTOM = (56, 30, 96)
 BOARD_COLOR = (36, 82, 214)
 BOARD_LIGHT = (84, 136, 250)
 BOARD_DARK = (18, 44, 140)
 BACKPLATE = (10, 14, 34)
-TEXT = (240, 243, 255)
-MUTED = (146, 154, 192)
-BUTTON = (56, 66, 128)
-BUTTON_HOVER = (80, 94, 172)
-
-PIECE_STYLE = {
-    Piece.P1: {"base": (233, 66, 84), "dark": (148, 26, 48), "light": (255, 142, 152)},
-    Piece.P2: {"base": (255, 204, 54), "dark": (192, 136, 6), "light": (255, 242, 164)},
-}
-
-
-def mix(a, b, t: float):
-    """Mistura linear entre duas cores RGB."""
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
-
-
-def pick_font(size: int, bold: bool = True) -> pygame.font.Font:
-    return pygame.font.SysFont(
-        "segoeui,helveticaneue,helvetica,arial,dejavusans,freesans", size, bold=bold
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -67,7 +59,7 @@ class Layout:
     PAD = 14          # moldura interna do tabuleiro
     MARGIN_X = 40
     HEADER_H = 170    # título, status e a peça que "paira" sobre o tabuleiro
-    FOOTER_H = 120    # placar, botão e dicas
+    FOOTER_H = 120    # placar, botões e dicas
     MIN_W = 560
 
     def __init__(self, rows: int, cols: int, screen_size=None, max_cell: int = 84):
@@ -86,8 +78,13 @@ class Layout:
 
         self.drop_y = self.board_rect.top - self.radius - 8
         self.score_y = self.board_rect.bottom + 24
-        self.button_rect = pygame.Rect(0, 0, 190, 38)
-        self.button_rect.center = (self.win_w // 2, self.board_rect.bottom + 62)
+
+        bw, bh, gap = 170, 38, 14
+        cy = self.board_rect.bottom + 62
+        self.new_rect = pygame.Rect(0, 0, bw, bh)
+        self.new_rect.center = (self.win_w // 2 - (bw + gap) // 2, cy)
+        self.menu_rect = pygame.Rect(0, 0, bw, bh)
+        self.menu_rect.center = (self.win_w // 2 + (bw + gap) // 2, cy)
         self.hint_y = self.win_h - 14
 
     def cell_center(self, row: int, col: int) -> tuple[float, float]:
@@ -107,25 +104,6 @@ class Layout:
 # --------------------------------------------------------------------------- #
 # Sprites pré-renderizados (supersampling => bordas suaves, sem custo por frame)
 # --------------------------------------------------------------------------- #
-def make_disc_sprite(radius: int, style: dict) -> pygame.Surface:
-    ss = 4
-    r = radius * ss
-    surf = pygame.Surface((2 * r, 2 * r), pygame.SRCALPHA)
-    surf.fill((*style["dark"], 0))
-    c = (r, r)
-    pygame.draw.circle(surf, style["dark"], c, r)
-    pygame.draw.circle(surf, style["base"], c, int(r * 0.92))
-    pygame.draw.circle(surf, mix(style["base"], style["dark"], 0.45), c, int(r * 0.66))
-    pygame.draw.circle(surf, mix(style["base"], style["light"], 0.22), c, int(r * 0.58))
-    shine = pygame.Surface((2 * r, 2 * r), pygame.SRCALPHA)
-    pygame.draw.ellipse(
-        shine, (255, 255, 255, 75),
-        pygame.Rect(int(r * 0.38), int(r * 0.24), int(r * 0.60), int(r * 0.28)),
-    )
-    surf.blit(shine, (0, 0))
-    return pygame.transform.smoothscale(surf, (2 * radius, 2 * radius))
-
-
 def make_ring_sprite(radius: int) -> pygame.Surface:
     ss = 4
     outer = radius + 10
@@ -165,9 +143,7 @@ def make_board_sprite(layout: Layout) -> pygame.Surface:
 
 def make_background(layout: Layout) -> pygame.Surface:
     w, h = layout.win_w, layout.win_h
-    surf = pygame.Surface((w, h))
-    for y in range(h):
-        pygame.draw.line(surf, mix(BG_TOP, BG_BOTTOM, y / (h - 1)), (0, y), (w, y))
+    surf = make_gradient(w, h)
 
     # sombra suave sob o tabuleiro (retângulos concêntricos, do maior ao menor)
     shadow = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -215,58 +191,21 @@ class FallingDisc:
                 self.done = True
 
 
-class Button:
-    def __init__(self, rect: pygame.Rect, label: str, font: pygame.font.Font):
-        self.rect = rect
-        self.label = label
-        self.font = font
-
-    def hit(self, pos) -> bool:
-        return self.rect.collidepoint(pos)
-
-    def draw(self, surface: pygame.Surface, mouse_pos, pulse: float = 0.0) -> None:
-        color = BUTTON_HOVER if self.rect.collidepoint(mouse_pos) else BUTTON
-        color = mix(color, PIECE_STYLE[Piece.P2]["base"], 0.35 * pulse)
-        pygame.draw.rect(surface, color, self.rect, border_radius=12)
-        pygame.draw.rect(surface, mix(color, (255, 255, 255), 0.3), self.rect, width=2, border_radius=12)
-        text = self.font.render(self.label, True, TEXT)
-        surface.blit(text, text.get_rect(center=self.rect.center))
-
-
 # --------------------------------------------------------------------------- #
-# Aplicação
+# Tela da partida
 # --------------------------------------------------------------------------- #
-class App:
-    def __init__(self, game: Optional[Game] = None):
-        pygame.init()
-        pygame.display.set_caption("Conecta 4")
+class GameScreen(Screen):
+    """O tabuleiro. Os assets são criados uma vez; `start(game)` começa cada partida."""
 
-        info = pygame.display.Info()
-        screen_size = (info.current_w, info.current_h) if info.current_w > 0 and info.current_h > 0 else None
-
-        self.game = game or Game()
-        board = self.game.board
-        self.layout = Layout(board.rows, board.cols, screen_size)
-        self.screen = self._open_window()
-        self.clock = pygame.time.Clock()
-        self._build_assets()
-
-        self.hover_col: Optional[int] = None
-        self.anim: Optional[FallingDisc] = None
-        self.cpu_timer = 0.0
+    def __init__(self, layout: Layout):
+        self.layout = layout
+        self.screen: Optional[pygame.Surface] = None  # superfície do frame atual (vem do draw)
+        self.game: Optional[Game] = None
         self.time = 0.0
-        self.scores = {Piece.P1: 0, Piece.P2: 0, "draws": 0}
-        self.result_recorded = False
+        self._build_assets()
+        self._clear_state()
 
     # ---- inicialização ----------------------------------------------------- #
-    def _open_window(self) -> pygame.Surface:
-        size = (self.layout.win_w, self.layout.win_h)
-        try:
-            # SCALED: a janela pode ser redimensionada mantendo a proporção
-            return pygame.display.set_mode(size, pygame.SCALED | pygame.RESIZABLE)
-        except pygame.error:
-            return pygame.display.set_mode(size)
-
     def _build_assets(self) -> None:
         L = self.layout
         self.bg = make_background(L)
@@ -290,11 +229,32 @@ class App:
         self.f_status = pick_font(26)
         self.f_small = pick_font(19)
         self.f_hint = pick_font(15, bold=False)
-        self.button = Button(L.button_rect, "Novo jogo  (R)", pick_font(18))
+        f_button = pick_font(18)
+        self.new_button = Button(L.new_rect, "Novo jogo  (R)", f_button)
+        self.menu_button = Button(L.menu_rect, "Menu  (Esc)", f_button)
+
+    def _clear_state(self) -> None:
+        self.hover_col: Optional[int] = None
+        self.anim: Optional[FallingDisc] = None
+        self.cpu_timer = 0.0
+        self.scores = {Piece.P1: 0, Piece.P2: 0, "draws": 0}
+        self.result_recorded = False
 
     # ---- ações ------------------------------------------------------------- #
+    def start(self, game: Game) -> None:
+        """Começa uma partida nova (zera o placar)."""
+        board = game.board
+        if (board.rows, board.cols) != (self.layout.rows, self.layout.cols):
+            raise ValueError(
+                "Todos os modos precisam usar a mesma grade "
+                f"({self.layout.rows}x{self.layout.cols}); recebi {board.rows}x{board.cols}."
+            )
+        self.game = game
+        self._clear_state()
+        self.hover_col = self.layout.col_at(pygame.mouse.get_pos())
+
     def new_game(self) -> None:
-        """Reinicia. Se a partida anterior terminou, quem começa se alterna."""
+        """Reinicia mantendo o placar. Se a partida anterior terminou, quem começa se alterna."""
         first = self.game.first_player
         if self.game.is_over:
             first = first.opponent
@@ -334,14 +294,10 @@ class App:
             self.hover_col = max(0, min(cols - 1, self.hover_col + delta))
 
     # ---- eventos ----------------------------------------------------------- #
-    def handle_event(self, event: pygame.event.Event) -> bool:
-        """Processa um evento. Devolve False quando o usuário quer sair."""
-        if event.type == pygame.QUIT:
-            return False
-
+    def handle_event(self, event: pygame.event.Event) -> Optional[str]:
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                return False
+                return GO_MENU
             if event.key == pygame.K_r:
                 self.new_game()
             elif event.key in (pygame.K_LEFT, pygame.K_a):
@@ -355,13 +311,15 @@ class App:
             self.hover_col = self.layout.col_at(event.pos)
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if self.button.hit(event.pos):
+            if self.new_button.hit(event.pos):
                 self.new_game()
+            elif self.menu_button.hit(event.pos):
+                return GO_MENU
             else:
                 col = self.layout.col_at(event.pos)
                 self.hover_col = col if col is not None else self.hover_col
                 self._human_drop(col)
-        return True
+        return None
 
     # ---- atualização ------------------------------------------------------- #
     def update(self, dt: float) -> None:
@@ -391,7 +349,8 @@ class App:
                 self._play(player.choose_move(g))
 
     # ---- desenho ----------------------------------------------------------- #
-    def draw(self) -> None:
+    def draw(self, surface: pygame.Surface) -> None:
+        self.screen = surface
         L = self.layout
         self.screen.blit(self.bg, (0, 0))
         self._draw_title()
@@ -402,7 +361,6 @@ class App:
         self._draw_hover_preview()
         self._draw_win_effect()
         self._draw_footer()
-        pygame.display.flip()
 
     def _draw_title(self) -> None:
         L = self.layout
@@ -517,22 +475,89 @@ class App:
                 self.screen.blit(icon, icon.get_rect(midleft=(left, L.score_y)))
             self.screen.blit(text, text.get_rect(midleft=(left + icon_w, L.score_y)))
 
+        mouse = pygame.mouse.get_pos()
         pulse = 0.5 + 0.5 * math.sin(self.time * 4) if g.is_over and self.anim is None else 0.0
-        self.button.draw(self.screen, pygame.mouse.get_pos(), pulse)
+        self.new_button.draw(self.screen, mouse, pulse)
+        self.menu_button.draw(self.screen, mouse)
 
         hint = self.f_hint.render(
-            "Clique ou use as setas + espaço   |   R: novo jogo   |   Esc: sair", True, MUTED
+            "Clique ou use as setas + espaço   |   R: novo jogo   |   Esc: menu", True, MUTED
         )
         self.screen.blit(hint, hint.get_rect(center=(L.win_w // 2, L.hint_y)))
 
-    # ---- laço principal ---------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+# Aplicação
+# --------------------------------------------------------------------------- #
+GameFactory = Callable[[], Game]
+
+
+class App:
+    """Abre a janela e navega entre menu, créditos e partida.
+
+    new_pvp / new_pvc: funções sem argumentos que devolvem um `Game` novo para
+    cada modo (quem monta os jogadores é o main.py). Os dois modos precisam usar
+    a mesma grade, porque a janela é dimensionada uma única vez.
+    """
+
+    def __init__(self, new_pvp: GameFactory, new_pvc: GameFactory):
+        pygame.init()
+        pygame.display.set_caption("Conecta 4")
+
+        self.new_pvp = new_pvp
+        self.new_pvc = new_pvc
+
+        info = pygame.display.Info()
+        screen_size = (info.current_w, info.current_h) if info.current_w > 0 and info.current_h > 0 else None
+        sample = new_pvp().board
+        self.layout = Layout(sample.rows, sample.cols, screen_size)
+        self.screen = self._open_window()
+        self.clock = pygame.time.Clock()
+
+        size = (self.layout.win_w, self.layout.win_h)
+        background = make_gradient(*size)
+        self.menu = MenuScreen(size, background)
+        self.credits = CreditsScreen(size, background)
+        self.game_screen = GameScreen(self.layout)
+        self.current: Screen = self.menu
+
+    def _open_window(self) -> pygame.Surface:
+        size = (self.layout.win_w, self.layout.win_h)
+        try:
+            # SCALED: a janela pode ser redimensionada mantendo a proporção
+            return pygame.display.set_mode(size, pygame.SCALED | pygame.RESIZABLE)
+        except pygame.error:
+            return pygame.display.set_mode(size)
+
+    def _navigate(self, action: str) -> bool:
+        """Troca de tela. Devolve False quando é para fechar o jogo."""
+        if action == QUIT:
+            return False
+        if action == GO_MENU:
+            self.current = self.menu
+        elif action == GO_CREDITS:
+            self.current = self.credits
+        elif action == GO_PVP:
+            self.game_screen.start(self.new_pvp())
+            self.current = self.game_screen
+        elif action == GO_PVC:
+            self.game_screen.start(self.new_pvc())
+            self.current = self.game_screen
+        return True
+
     def run(self) -> None:
         running = True
         while running:
             dt = min(self.clock.tick(FPS) / 1000.0, 0.05)
             for event in pygame.event.get():
-                if not self.handle_event(event):
+                if event.type == pygame.QUIT:
                     running = False
-            self.update(dt)
-            self.draw()
+                    break
+                action = self.current.handle_event(event)
+                if action and not self._navigate(action):
+                    running = False
+                    break
+            self.current.update(dt)
+            self.current.draw(self.screen)
+            pygame.display.flip()
         pygame.quit()
