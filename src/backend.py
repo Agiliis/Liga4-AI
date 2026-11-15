@@ -30,8 +30,8 @@ from typing import Optional
 # --------------------------------------------------------------------------- #
 # Configuração padrão da grade (troque aqui, o frontend se adapta sozinho)
 # --------------------------------------------------------------------------- #
-ROWS = 7      # linhas
-COLS = 6      # colunas
+ROWS = 6      # linhas
+COLS = 7      # colunas
 CONNECT = 4   # peças em sequência necessárias para vencer
 
 Cell = tuple[int, int]  # (linha, coluna); a linha 0 é o topo do tabuleiro
@@ -42,7 +42,7 @@ class Piece(IntEnum):
 
     EMPTY = 0
     P1 = 1
-    P2 = 2
+    P2 = -1
 
     @property
     def opponent(self) -> "Piece":
@@ -163,6 +163,9 @@ class Board:
     def to_list(self) -> list[list[int]]:
         return [[int(p) for p in row] for row in self._grid]
 
+    def to_flat(self) -> list[int]:
+        return [int(p) for row in self._grid for p in row]
+
     def __str__(self) -> str:
         symbols = {Piece.EMPTY: ".", Piece.P1: "X", Piece.P2: "O"}
         return "\n".join(" ".join(symbols[p] for p in row) for row in self._grid)
@@ -257,6 +260,7 @@ class Game:
         self.history.append(Move(piece, row, col))
 
         line = self.board.winning_line(row, col)
+
         if line:
             self.status = Status.WON
             self.winner = piece

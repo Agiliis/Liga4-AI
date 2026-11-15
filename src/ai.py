@@ -27,8 +27,11 @@ precisa rodar numa thread/processo, senão a janela congela enquanto ela pensa.
 from __future__ import annotations
 
 import random
+import numpy as np
+import pandas as pd
 
-from src.backend import Game, Player
+from src.backend import Game, Player, Piece
+from scipy.spatial import distance
 
 
 class CPUPlayer(Player):
@@ -38,13 +41,40 @@ class CPUPlayer(Player):
 
     def __init__(self, name: str = "CPU"):
         super().__init__(name)
-        # Espaço para configurações da sua IA (dificuldade, profundidade de busca...):
-        # self.depth = 4
+
+        df = pd.read_csv("db/df_jogador_2.csv", index_col=0)
+
+        self.data = df.to_numpy(dtype=np.float32)
+
+        self._sq_norms = (self.data ** 2).sum(axis=1) 
+
+
+    def KNN_1(self, quadro_atual, dist_fun="euclidean"):
+        q = np.asarray(quadro_atual, dtype=np.float32)
+
+        match dist_fun:
+            case "cityblock":
+                return float(np.abs(self.data - q).sum(axis=1).min())
+            case _:
+                d2 = self._sq_norms - 2.0 * (self.data @ q) + float(q @ q)
+
+                return float(np.sqrt(max(float(d2.min()), 0.0)))
+
 
     def choose_move(self, game: Game) -> int:
         """Devolve a coluna em que a CPU quer jogar."""
-        # TODO: trocar pelo algoritmo da IA. Exemplo de ideia, passo a passo:
-        #   1. se eu consigo vencer jogando numa coluna, jogo nela;
-        #   2. se o adversário venceria na próxima, bloqueio essa coluna;
-        #   3. senão, avalio as jogadas (minimax, MCTS, heurística...) e escolho a melhor.
-        return random.choice(game.valid_moves())
+
+        centro = (game.board.cols - 1) / 2
+        melhor_chave, melhor_coluna = None, None
+
+        for coluna in game.valid_moves():
+            quadro_simulado = game.board.copy()
+            quadro_simulado.drop(coluna, Piece.P2)
+
+            dist = self.KNN_1(quadro_atual=quadro_simulado.to_flat())
+
+            chave = (round(dist, 4), abs(coluna - centro), random.random())
+            if melhor_chave is None or chave < melhor_chave:
+                melhor_chave, melhor_coluna = chave, coluna
+        
+        return melhor_coluna
