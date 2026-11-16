@@ -7,6 +7,7 @@ o frontend chama `game.play(col)`, lê `game.board`, `game.status`, etc.
 Telas
 -----
     MenuScreen / CreditsScreen   em menu.py
+    DevModeScreen                em dev_mode.py (avaliação dos modelos)
     GameScreen                   aqui: o tabuleiro em si
 
 O `App` recebe duas "fábricas" de partida (funções sem argumentos que devolvem
@@ -34,9 +35,10 @@ from typing import Callable, Optional
 import pygame
 
 from src.backend import Game, InvalidMoveError, Piece, Status
+from src.dev_mode import DevModeScreen
 from src.menu import CreditsScreen, MenuScreen
 from src.ui import (
-    GO_CREDITS, GO_MENU, GO_PVC, GO_PVP, MUTED, PIECE_STYLE, QUIT, TEXT,
+    GO_CREDITS, GO_DEV, GO_MENU, GO_PVC, GO_PVP, MUTED, PIECE_STYLE, QUIT, TEXT,
     Button, Screen, make_disc_sprite, make_gradient, mix, pick_font,
 )
 
@@ -518,6 +520,7 @@ class App:
         background = make_gradient(*size)
         self.menu = MenuScreen(size, background)
         self.credits = CreditsScreen(size, background)
+        self.dev_mode = DevModeScreen(size, background)
         self.game_screen = GameScreen(self.layout)
         self.current: Screen = self.menu
 
@@ -537,6 +540,8 @@ class App:
             self.current = self.menu
         elif action == GO_CREDITS:
             self.current = self.credits
+        elif action == GO_DEV:
+            self.current = self.dev_mode
         elif action == GO_PVP:
             self.game_screen.start(self.new_pvp())
             self.current = self.game_screen

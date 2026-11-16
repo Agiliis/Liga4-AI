@@ -11,6 +11,7 @@ tela) ou o nome de uma ação, e o `App` (em frontend.py) decide para onde ir:
     GO_PVP       começa uma partida Player VS Player
     GO_PVC       começa uma partida Player VS CPU
     GO_CREDITS   abre os créditos
+    GO_DEV       abre o modo desenvolvedor (avaliação dos modelos)
     GO_MENU      volta ao menu
     QUIT         fecha o jogo
 """
@@ -29,6 +30,7 @@ from src.backend import Piece
 GO_PVP = "pvp"
 GO_PVC = "pvc"
 GO_CREDITS = "credits"
+GO_DEV = "dev"
 GO_MENU = "menu"
 QUIT = "quit"
 

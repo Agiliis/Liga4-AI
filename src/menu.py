@@ -1,7 +1,7 @@
 """
 menu.py - Telas de menu e créditos.
 
-    MenuScreen      "Player VS Player", "Player VS CPU" e "Créditos"
+    MenuScreen      "Player VS Player", "Player VS CPU", "Créditos" e "Modo desenvolvedor"
     CreditsScreen   os 4 desenvolvedores, com foto e nome
 
 Fotos dos desenvolvedores
@@ -25,7 +25,7 @@ import pygame
 
 from src.backend import Piece
 from src.ui import (
-    GO_CREDITS, GO_MENU, GO_PVC, GO_PVP, MUTED, PIECE_STYLE, QUIT, TEXT,
+    GO_CREDITS, GO_DEV, GO_MENU, GO_PVC, GO_PVP, MUTED, PIECE_STYLE, QUIT, TEXT,
     Button, Screen, make_disc_sprite, mix, pick_font,
 )
 
@@ -134,6 +134,7 @@ class MenuScreen(Screen):
         ("Player VS Player", GO_PVP),
         ("Player VS CPU", GO_PVC),
         ("Créditos", GO_CREDITS),
+        ("Modo desenvolvedor", GO_DEV),
     )
 
     def __init__(self, size: tuple[int, int], background: pygame.Surface):
@@ -150,8 +151,10 @@ class MenuScreen(Screen):
         f_btn = pick_font(25)
 
         self.title_y = int(h * 0.16)
-        bw, bh, gap = 320, 60, 18
+        bw, gap = 320, 18
         top = int(h * 0.45)
+        # encolhe os botões se a janela for baixa demais para todos caberem
+        bh = int(max(36, min(60, (h - 60 - top) / len(self.ENTRIES) - gap)))
         self.buttons: list[tuple[Button, str]] = []
         for i, (label, action) in enumerate(self.ENTRIES):
             rect = pygame.Rect(0, 0, bw, bh)
