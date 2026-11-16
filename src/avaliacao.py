@@ -53,26 +53,34 @@ class Resultado:
         return self.vitorias + self.derrotas + self.empates
 
 
-def jogar_partida(p1: Player, p2: Player, alvo: Piece, res: Resultado) -> None:
-    """Joga uma partida e anota o resultado do ponto de vista de `alvo`."""
+def _jogar(p1: Player, p2: Player, resultados: dict[Piece, Resultado]) -> None:
+    """Joga uma partida e anota o resultado do ponto de vista de cada peça em
+    `resultados` (pode ser só uma, ou as duas)."""
     game = Game(players={Piece.P1: p1, Piece.P2: p2})
     while not game.is_over:
         jogador = game.current_player
         t0 = time.perf_counter()
         col = jogador.choose_move(game)
-        if game.turn == alvo:
+        res = resultados.get(game.turn)
+        if res is not None:
             res.tempo_por_jogada.append(time.perf_counter() - t0)
         game.play(col)
 
     jogadas = len(game.history)
-    if game.status is Status.DRAW:
-        res.empates += 1
-    elif game.winner == alvo:
-        res.vitorias += 1
-        res.jogadas_vitoria.append(jogadas)
-    else:
-        res.derrotas += 1
-        res.jogadas_derrota.append(jogadas)
+    for alvo, res in resultados.items():
+        if game.status is Status.DRAW:
+            res.empates += 1
+        elif game.winner == alvo:
+            res.vitorias += 1
+            res.jogadas_vitoria.append(jogadas)
+        else:
+            res.derrotas += 1
+            res.jogadas_derrota.append(jogadas)
+
+
+def jogar_partida(p1: Player, p2: Player, alvo: Piece, res: Resultado) -> None:
+    """Joga uma partida e anota o resultado do ponto de vista de `alvo`."""
+    _jogar(p1, p2, {alvo: res})
 
 
 def avaliar(
@@ -113,6 +121,19 @@ def teste_duas_proporcoes(k1: int, n1: int, k2: int, n2: int) -> tuple[float, fl
     z = (k1 / n1 - k2 / n2) / se
     pval = 0.5 * math.erfc(z / math.sqrt(2))
     return (z, pval)
+
+
+def teste_binomial(k: int, n: int) -> float:
+    """Teste binomial exato bilateral de H0: p = 0,5. Devolve o p-valor.
+
+    Usado no confronto direto: entre as partidas decididas (sem empate), os
+    dois modelos vencem com a mesma frequência?
+    """
+    if n == 0:
+        return 1.0
+    obs = math.comb(n, k)
+    pval = sum(math.comb(n, i) for i in range(n + 1) if math.comb(n, i) <= obs) / 2**n
+    return min(1.0, pval)
 
 
 def media(xs: list[float]) -> Optional[float]:
@@ -218,6 +239,77 @@ def avaliar_modelo(
             "p_valor": p,
             "alfa": 0.05,
             "melhor_que_acaso": p < 0.05,
+        },
+        "duracao_s": duracao,
+    }
+
+
+def posicoes_confronto(nome_a: str, nome_b: str) -> tuple[str, str]:
+    """Decide quem é P1 e quem é P2 num confronto. Devolve (nome_p1, nome_p2).
+
+    Por padrão A é P1 e B é P2; se A só souber jogar como P2, inverte.
+    """
+    # TODO: remover quando o KNN1 deixar de ter Piece.P2 fixo (ver POSICAO_AVALIADA).
+    if nome_a in SO_JOGA_COMO_P2 and nome_b in SO_JOGA_COMO_P2:
+        raise ValueError(
+            f"{nome_a!r} e {nome_b!r} só jogam como 2º jogador; não dá para colocá-los frente a frente."
+        )
+    if nome_a in SO_JOGA_COMO_P2:
+        return nome_b, nome_a
+    return nome_a, nome_b
+
+
+def confronto(
+    nome_a: str,
+    nome_b: str,
+    n: int,
+    seed: Optional[int] = None,
+    callback_progresso: Optional[Callable[[int, int], None]] = None,
+) -> dict:
+    """Modelo contra modelo: `n` partidas entre `nome_a` e `nome_b`.
+
+    As posições vêm de `posicoes_confronto` (um modelo que só joga como P2 fica
+    como P2). Devolve o placar, as métricas de cada lado e um teste binomial
+    sobre as partidas decididas ("algum dos dois vence mais que o outro?").
+    `callback_progresso(feitas, n)` é chamado após cada partida. Não imprime nada.
+    """
+    for nome in (nome_a, nome_b):
+        if nome not in MODELOS:
+            raise KeyError(f"Modelo desconhecido: {nome!r}. Opções: {list(MODELOS)}")
+    if n <= 0:
+        raise ValueError("n precisa ser positivo.")
+    nome_p1, nome_p2 = posicoes_confronto(nome_a, nome_b)
+
+    if seed is not None:
+        random.seed(seed)
+    p1, p2 = _instancia(nome_p1), _instancia(nome_p2)
+
+    res = {Piece.P1: Resultado(), Piece.P2: Resultado()}
+    t0 = time.perf_counter()
+    for i in range(n):
+        _jogar(p1, p2, res)
+        if callback_progresso is not None:
+            callback_progresso(i + 1, n)
+    duracao = time.perf_counter() - t0
+
+    v1, v2 = res[Piece.P1].vitorias, res[Piece.P2].vitorias
+    decididas = v1 + v2
+    pval = teste_binomial(v1, decididas)
+    return {
+        "p1": nome_p1,
+        "p2": nome_p2,
+        "n": n,
+        "seed": seed,
+        "placar": {"p1": v1, "p2": v2, "empates": res[Piece.P1].empates},
+        "metricas_p1": metricas(res[Piece.P1]),
+        "metricas_p2": metricas(res[Piece.P2]),
+        "teste_diferenca": {
+            "decididas": decididas,
+            "p_valor": pval,
+            "alfa": 0.05,
+            "diferenca_significativa": pval < 0.05,
+            # Lembrete: em Conecta-4 começar jogando é vantagem, então parte da
+            # diferença pode ser da posição, não do modelo.
         },
         "duracao_s": duracao,
     }
