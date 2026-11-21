@@ -2,8 +2,8 @@
 JOGADOR HÍBRIDO: ÁRVORE (MINIMAX + ALPHA-BETA) + KNN COMO AVALIADOR DE FOLHAS
 ============================================================================
 
-Pré-requisito: rodar ANTES `python limpar_dados_treino.py` (gera `dados_treino_limpos.npz`).
-Este arquivo deve ficar na mesma pasta do `dados_treino_limpos.npz`.
+Pré-requisito: rodar ANTES `python limpar_dados_treino.py` e colocar o `tree_knn_dataset.npz`
+gerado na pasta `db/` (na raiz do projeto, onde o jogo é executado).
 
 Convenções internas:
     - Dentro da árvore, o tabuleiro está SEMPRE na visão da IA: +1 = peça da IA, -1 = adversário.
@@ -15,9 +15,11 @@ Novidades em relação ao `knn_new.py`:
     1. Treina com os dados limpos (sem terminais, convenção única, meio de jogo reconstruído).
     2. Lookup exato: tabuleiros de 8 peças existentes no UCI respondem na hora, sem KNN.
     3. Cache de avaliações do KNN (chave = tabuleiro, tratando espelhos como iguais).
+       Os espelhos dos tabuleiros de treino já vêm prontos no .npz (feitos em limpar_dados_treino.py).
     4. Limpeza da cache: tabuleiros com menos peças que o jogo atual nunca mais ocorrem e são apagados.
     5. A árvore joga e desfaz jogadas no MESMO tabuleiro (sem copiar) e checa vitória só ao redor da peça nova.
-    6. Descobre se a IA é o primeiro ou o segundo jogador pela paridade de peças a cada jogada.
+    6. Descobre se a IA é o primeiro ou o segundo jogador pela paridade de peças a cada jogada
+       e usa `game.turn` para saber a COR da própria peça (a CPU é sempre Piece.P2, mesmo quando começa).
 """
 
 from __future__ import annotations
@@ -62,23 +64,16 @@ def carregar_dados_limpos() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             f"'{CAMINHO_DADOS_LIMPOS.name}' não encontrado. Rode primeiro: python limpar_dados_treino.py"
         )
     arquivo = np.load(CAMINHO_DADOS_LIMPOS)
+    if "ja_inclui_espelhos" not in arquivo.files:
+        raise RuntimeError(
+            f"'{CAMINHO_DADOS_LIMPOS.name}' é de uma versão antiga (sem os espelhos prontos). "
+            "Rode de novo: python limpar_dados_treino.py"
+        )
     return arquivo["tabuleiros"], arquivo["notas"], arquivo["fontes"]
 
 
-def gerar_versao_espelhada(tabuleiros_achatados: np.ndarray) -> np.ndarray:
-    grade = tabuleiros_achatados.reshape(-1, NUMERO_DE_LINHAS, NUMERO_DE_COLUNAS)
-    return np.flip(grade, axis=2).reshape(-1, NUMERO_DE_CASAS)
-
-
 def treinar_knn(tabuleiros: np.ndarray, notas: np.ndarray) -> KNeighborsRegressor:
-    """Treina o KNN com os tabuleiros e também com seus espelhos (o jogo é simétrico)."""
-    espelhos = gerar_versao_espelhada(tabuleiros)
-    tabuleiro_e_igual_ao_espelho = np.all(tabuleiros == espelhos, axis=1)
-
-    # Tabuleiros simétricos já são o próprio espelho: não repetimos para não pesar duas vezes.
-    tabuleiros_para_treino = np.vstack([tabuleiros, espelhos[~tabuleiro_e_igual_ao_espelho]])
-    notas_para_treino = np.concatenate([notas, notas[~tabuleiro_e_igual_ao_espelho]])
-
+    """Treina o KNN com os dados limpos (que já incluem os espelhos e não têm duplicatas)."""
     modelo_knn = KNeighborsRegressor(
         n_neighbors=QUANTIDADE_DE_VIZINHOS_DO_KNN,
         metric="manhattan",
@@ -88,7 +83,7 @@ def treinar_knn(tabuleiros: np.ndarray, notas: np.ndarray) -> KNeighborsRegresso
         algorithm="brute",
         n_jobs=1,  # consultas são uma folha por vez: criar várias threads a cada chamada só atrasa
     )
-    modelo_knn.fit(tabuleiros_para_treino.astype(np.float32), notas_para_treino)
+    modelo_knn.fit(tabuleiros.astype(np.float32), notas)
     return modelo_knn
 
 
@@ -282,12 +277,17 @@ class TreeKNNPlayer(Player):
     # -----------------------------------------------------------------
     # Interface com o backend do grupo
     # -----------------------------------------------------------------
-    def _preparar_estado_da_busca(self, tabuleiro_real: np.ndarray) -> None:
+    def _preparar_estado_da_busca(self, tabuleiro_real: np.ndarray, peca_da_ia_no_backend: int) -> None:
         numero_de_pecas = int(np.count_nonzero(tabuleiro_real))
 
-        # Número par de peças = vez de quem começou (+1 no backend); ímpar = vez do segundo (-1).
+        # QUEM COMEÇOU e QUAL É A COR DA MINHA PEÇA são coisas independentes:
+        #   - quem começou: pela paridade. Número par de peças no tabuleiro = é a vez de quem começou.
+        #   - cor da minha peça: vem do backend (game.turn). O humano é sempre Piece.P1 (+1) e a CPU
+        #     sempre Piece.P2 (-1), mesmo nas partidas em que a CPU começa (o frontend alterna quem começa).
         self._ia_e_o_primeiro_jogador = (numero_de_pecas % 2 == 0)
-        self._tabuleiro_na_visao_da_ia = (tabuleiro_real if self._ia_e_o_primeiro_jogador else -tabuleiro_real).copy()
+
+        # Visão da IA: a peça da IA vira +1 e a do adversário vira -1, qualquer que seja a cor real dela.
+        self._tabuleiro_na_visao_da_ia = (tabuleiro_real * np.int8(peca_da_ia_no_backend)).astype(np.int8)
         self._numero_de_pecas_no_tabuleiro = numero_de_pecas
         self._proxima_linha_livre_de_cada_coluna = [
             NUMERO_DE_LINHAS - 1 - int(np.count_nonzero(self._tabuleiro_na_visao_da_ia[:, coluna]))
@@ -296,7 +296,8 @@ class TreeKNNPlayer(Player):
 
     def choose_move(self, game: Game) -> int:
         tabuleiro_real = np.array(game.board.to_flat(), dtype=np.int8).reshape(NUMERO_DE_LINHAS, NUMERO_DE_COLUNAS)
-        self._preparar_estado_da_busca(tabuleiro_real)
+        peca_da_ia_no_backend = int(game.turn)  # +1 (Piece.P1) ou -1 (Piece.P2): a cor de quem vai jogar agora
+        self._preparar_estado_da_busca(tabuleiro_real, peca_da_ia_no_backend)
 
         self._apagar_da_cache_os_tabuleiros_impossiveis(self._numero_de_pecas_no_tabuleiro)
         self._esvaziar_cache_se_passou_do_limite()
