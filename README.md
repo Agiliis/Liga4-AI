@@ -19,6 +19,19 @@ Column 43 marks the winner of the game : -1, 1, and 0 for tie games.</br>
 
 **Instâncias: 376641**
 
+3. HuggingFace: https://huggingface.co/datasets/theGhoul21/connect4-mcts-unknowngames-unknownsims
+Sem descrição, seguem exemplos das colunas.
+states:
+[ [ [ 0, 0, 0, 0, 0, 0, 0 ], [ 0, 0, 0, 0, 0, 0, 0 ], [ 0, 0, 0, 0, 0, 0, 0 ], [ 0, 0, 0, 0, 0, 0, 0 ], [ 0,...
+values:
+[ 1 ]
+policies:
+[ 0, 0, 0, 1, 0, 0, 0 ]
+game_id:
+0
+move_number:
+0
+
 ## Algoritmos:
 
 1. **1-NN**
