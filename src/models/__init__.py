@@ -14,6 +14,7 @@ from typing import Callable
 from src.backend import Player
 from src.models.heuristica import HeuristicPlayer
 from src.models.random import RandomPlayer
+from src.models.tree_knn import TreeKNNPlayer
 
 
 def _criar_knn1() -> Player:
@@ -26,6 +27,7 @@ MODELOS: dict[str, Callable[[], Player]] = {
     "Aleatório": lambda: RandomPlayer("Aleatório"),
     "Heurística": lambda: HeuristicPlayer("Heurística"),
     "KNN1": _criar_knn1,
+    "Tree+KNN": lambda: TreeKNNPlayer("Tree+KNN"),
 }
 
 # TODO: o KNN1 (src/ai.py) usa Piece.P2 fixo em choose_move, então só sabe
@@ -42,4 +44,4 @@ def criar_modelo(nome: str) -> Player:
     return fabrica()
 
 
-__all__ = ["MODELOS", "SO_JOGA_COMO_P2", "criar_modelo", "RandomPlayer", "HeuristicPlayer"]
+__all__ = ["MODELOS", "SO_JOGA_COMO_P2", "criar_modelo", "RandomPlayer", "HeuristicPlayer", "TreeKNNPlayer"]
